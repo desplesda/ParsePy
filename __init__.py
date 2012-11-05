@@ -16,6 +16,7 @@ import base64
 import json
 import datetime
 import collections
+import sys
 
 API_ROOT = 'https://api.parse.com/1/classes'
 
@@ -42,9 +43,16 @@ class ParseBase(object):
         request.get_method = lambda: http_verb
 
         # TODO: add error handling for server response
-        response = urllib2.urlopen(request)
-        response_body = response.read()
-        response_dict = json.loads(response_body)
+        try:
+            response = urllib2.urlopen(request)
+            response_body = response.read()
+            response_dict = json.loads(response_body)
+        except urllib2.HTTPError as e:
+            error_message = e.read()
+            print error_message
+            sys.exit(1)
+        
+        
 
         return response_dict
 
@@ -91,13 +99,21 @@ class ParseObject(ParseBase):
         self = self.__init__(None)
 
     def _populateFromDict(self, attrs_dict):
-        self._object_id = attrs_dict['objectId']
-        self._created_at = attrs_dict['createdAt']
-        self._updated_at = attrs_dict['updatedAt']
-
-        del attrs_dict['objectId']
-        del attrs_dict['createdAt']
-        del attrs_dict['updatedAt']
+        
+        if 'objectID' in attrs_dict:
+            self._object_id = attrs_dict['objectID']
+            del attrs_dict['objectID']
+            
+        if 'createdAt' in attrs_dict:
+            self._created_at = attrs_dict['createdAt']
+            del attrs_dict['createdAt']
+        
+        if 'updatedAt' in attrs_dict:
+            self._updated_at = attrs_dict['updatedAt']
+            del attrs_dict['updatedAt']
+        
+        
+        
 
         attrs_dict = dict(map(self._convertFromParseType, attrs_dict.items()))
 
@@ -112,7 +128,7 @@ class ParseObject(ParseBase):
                     'objectId': value._object_id}
         elif type(value) == datetime.datetime:
             value = {'__type': 'Date',
-                    'iso': value.isoformat()[:-3] + 'Z'} # take off the last 3 digits and add a Z
+                    'iso': value.isoformat()[:-3] + ':00.000Z'} # take off the last 3 digits and add a Z
         elif type(value) == ParseBinaryDataWrapper:
             value = {'__type': 'Bytes',
                     'base64': base64.b64encode(value)}
@@ -124,13 +140,18 @@ class ParseObject(ParseBase):
 
         if type(value) == dict and value.has_key('__type'):
             if value['__type'] == 'Pointer':
-                value = ParseQuery(value['className']).get(value['objectId'])
+                pass
+                #value = ParseQuery(value['className']).get(value['objectId'])
             elif value['__type'] == 'Date':
                 value = self._ISO8601ToDatetime(value['iso'])
             elif value['__type'] == 'Bytes':
                 value = ParseBinaryDataWrapper(base64.b64decode(value['base64']))
+            elif value['__type'] == 'GeoPoint':                
+                pass
+            elif value['__type'] == 'File':
+                pass
             else:
-                raise Exception('Invalid __type.')
+                raise Exception('Invalid __type {0}'.format(value['__type']))
 
         return (key, value)
 
@@ -157,7 +178,9 @@ class ParseObject(ParseBase):
         uri = '/%s' % self._class_name
 
         data = self._getJSONProperties()
-
+        
+        print data
+        
         response_dict = self._executeCall(uri, 'POST', data)
         
         self._created_at = self._updated_at = response_dict['createdAt']
@@ -208,6 +231,14 @@ class ParseQuery(ParseBase):
     def ne(self, name, value):
         self._where[name]['$ne'] = value
         return self
+        
+    def is_in(self,name,value):
+        self._where[name]['$in'] = value
+        return self;
+    
+    def is_not_in(self,name,value):
+        self._where[name]['$nin'] = value
+        return self;
 
     def order(self, order, decending=False):
         # add a minus sign before the order value if decending == True
